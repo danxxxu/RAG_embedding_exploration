@@ -1,0 +1,8 @@
+datasets/
+venv/
+# Ignore VS Code settings
+.vscode/
+
+# Ignore compiled Python files
+__pycache__/
+*.pyc
