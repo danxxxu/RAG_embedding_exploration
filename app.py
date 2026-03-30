@@ -11,6 +11,7 @@ from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 import faiss
 import textwrap
+import tempfile
 
 # -----------------------------
 # Wrap text box
@@ -170,9 +171,9 @@ def generate_cluster_labels(df, top_n=3):
     return cluster_names
 
 # -----------------------------
-# Build pipeline
+# Build pipeline (updated to accept num_clusters)
 # -----------------------------
-def build_system(model_name, chunk_method, chunk_size, overlap=5):
+def build_system(model_name, chunk_method, chunk_size, overlap=5, num_clusters=5):
     texts, sources = load_data("./datasets/rijn")
     model = SentenceTransformer(MODELS[model_name])
     chunks, chunk_sources = chunk_text(
@@ -187,11 +188,9 @@ def build_system(model_name, chunk_method, chunk_size, overlap=5):
     embeddings = model.encode(chunks)
     embeddings = normalize(embeddings)
 
-    # FAISS
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(np.array(embeddings))
 
-    # UMAP - 3D
     reducer = umap.UMAP(
         n_components=3,
         n_neighbors=10,
@@ -201,8 +200,9 @@ def build_system(model_name, chunk_method, chunk_size, overlap=5):
     )
     emb_3d = reducer.fit_transform(embeddings)
 
-    # Clustering
-    kmeans = KMeans(n_clusters=min(5, len(chunks)), random_state=0)
+    # Use the dynamic num_clusters from the UI
+    actual_clusters = min(num_clusters, len(chunks))
+    kmeans = KMeans(n_clusters=actual_clusters, random_state=0)
     labels = kmeans.fit_predict(embeddings)
 
     df = pd.DataFrame({
@@ -218,80 +218,55 @@ def build_system(model_name, chunk_method, chunk_size, overlap=5):
     return model, index, df, reducer
 
 # -----------------------------
-# Main function
+# Main function (updated with rotation logic)
 # -----------------------------
-def run(query, model_name, k, chunk_method, chunk_size, overlap, color_mode, selected_sources, show_labels):
+def run(query, model_name, k, chunk_method, chunk_size, overlap, color_mode, selected_sources, show_labels, num_clusters):
     model, index, df, reducer = build_system(
-        model_name, chunk_method, chunk_size, overlap
+        model_name, chunk_method, chunk_size, overlap, num_clusters
     )
 
-    # -----------------------------
-    # FILTER BY SOURCE
-    # -----------------------------
     if selected_sources:
         df = df[df["source"].isin(selected_sources)]
 
-    # -----------------------------
-    # QUERY
-    # -----------------------------
     query_embedding = model.encode([query])
     D, I = index.search(query_embedding, k)
     results = [df.iloc[i]["text"] for i in I[0] if i < len(df)]
 
     query_3d = reducer.transform(query_embedding)
     df_query = pd.DataFrame({
-        "x": [query_3d[0][0]],
-        "y": [query_3d[0][1]],
-        "z": [query_3d[0][2]],
-        "text": [query],
-        "source": ["query"],
-        "cluster": [-1]
+        "x": [query_3d[0][0]], "y": [query_3d[0][1]], "z": [query_3d[0][2]],
+        "text": [query], "source": ["query"], "cluster": [-1], "type": ["query"]
     })
 
     df["type"] = "document"
-    df_query["type"] = "query"
-
     df_all = pd.concat([df, df_query])
 
-    # -----------------------------
-    # CLUSTER LABELS
-    # -----------------------------
     if show_labels and color_mode == "cluster":
         cluster_names = generate_cluster_labels(df)
-        df_all["cluster_label"] = df_all["cluster"].map(cluster_names)
+        df_all["cluster_label"] = df_all["cluster"].map(cluster_names).fillna("Query")
         color_field = "cluster_label"
     else:
         color_field = color_mode
-
-    # -----------------------------
-    # PLOT
-    # -----------------------------
+    
+    # Create Figure
     fig = px.scatter_3d(
-        df_all,
-        x="x",
-        y="y",
-        z="z",
+        df_all, x="x", y="y", z="z", 
         color=color_field,
-        # symbol="type",
         hover_data=["wrapped_text", "source"],
-        title=f"3D Embedding Space (colored by {color_field})"
+        title="3D Embedding Space"
     )
 
     fig.update_layout(
         height=800,
-        autosize=True,
-        margin=dict(l=5, r=5, t=40, b=0),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.2,
-            xanchor="center",
-            x=0.5,
-            font=dict(size=10)
-            )
-        )
+        margin=dict(l=0, r=0, t=30, b=0),
+        scene=dict(camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)))
+    )
 
-    return fig, "\n".join(results)
+    # Save a temporary HTML version for "Fullscreen"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
+    fig.write_html(tmp.name)
+    
+    return fig, "\n".join(results), tmp.name
 
 # -----------------------------
 # inspection
@@ -316,64 +291,34 @@ with gr.Blocks(fill_width=True) as app:
     gr.Markdown("# RAG Embedding Explorer")
     with gr.Row():
         with gr.Column(scale=1):
-            model_name = gr.Dropdown(
-                choices=list(MODELS.keys()), value="MiniLM", label="Embedding Model"
-            )
-
+            model_name = gr.Dropdown(choices=list(MODELS.keys()), value="MiniLM", label="Embedding Model")
+            num_clusters = gr.Slider(2, 20, value=5, step=1, label="Number of Clusters")
             k = gr.Slider(1, 5, value=3, step=1, label="Top-K Retrieval")
-
-            chunk_method = gr.Radio(
-                choices=["characters", "words", "sentences", "semantic"],
-                value="words",
-                label="Chunking Method"
-                )
-
-            chunk_size = gr.Slider(10, 500, value=50, step=10, label="Chunk Size (chars / words / sentences / semantic max)")
-            overlap = gr.Slider(0, 100, value=20, step=5, label="Overlap (chars/words only)")
-            color_mode = gr.Radio(
-                choices=["cluster", "source"],
-                value="cluster",
-                label="Color By"
-                )
-            source_filter = gr.Dropdown(
-                choices=get_sources(),   # ✅ directly pass list
-                value=get_sources(),     # optional: select all by default
-                multiselect=True,
-                label="Filter by Source"
-                )
-
-            show_labels = gr.Checkbox(
-                value=False,
-                label="Show Cluster Labels (auto topics)"
-                )
+            chunk_method = gr.Radio(choices=["characters", "words", "sentences", "semantic"], value="words", label="Chunking Method")
+            chunk_size = gr.Slider(10, 500, value=50, step=10, label="Size")
+            overlap = gr.Slider(0, 100, value=20, step=5, label="Overlap")
+            color_mode = gr.Radio(choices=["cluster", "source"], value="cluster", label="Color By")
+            source_filter = gr.Dropdown(choices=get_sources(), value=get_sources(), multiselect=True, label="Sources")
+            show_labels = gr.Checkbox(value=False, label="Show Labels")
             query = gr.Textbox(label="Query", value="outdoor activities")
-
-            run_btn = gr.Button("Run")
+            
+            run_btn = gr.Button("Run", variant="primary")
 
         with gr.Column(scale=3):
             plot = gr.Plot(label="Embedding Space")
+            # Add a file download/link for the "Fullscreen" view
+            full_screen_link = gr.File(label="Download / Open Fullscreen HTML", visible=False)
             output = gr.Textbox(label="Results")
-            
-            run_btn.click(
-                fn=run,
-                inputs=[
-                    query,
-                    model_name,
-                    k,
-                    chunk_method,
-                    chunk_size,
-                    overlap,
-                    color_mode,
-                    source_filter,
-                    show_labels
-                    ],
-                outputs=[plot, output]
-                )
-            
-    # selected_id = gr.Number(label="Select point ID", precision=0)
-    # inspect_btn = gr.Button("Inspect Point")
-    # inspect_btn.click(
-    #     fn=inspect_point, inputs=[selected_id, model_name, chunk_method, chunk_size], outputs=output
-    # )
+    
+    # --- Event Handlers ---
+    def on_run_click(*args):
+        fig, results, html_path = run(*args)
+        return fig, results, gr.update(value=html_path, visible=True)
 
+    run_btn.click(
+        fn=on_run_click,
+        inputs=[query, model_name, k, chunk_method, chunk_size, overlap, color_mode, source_filter, show_labels, num_clusters],
+        outputs=[plot, output, full_screen_link]
+    )
+    
 app.launch()
