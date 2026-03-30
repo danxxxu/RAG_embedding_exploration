@@ -12,6 +12,26 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 import faiss
 import textwrap
 import tempfile
+import joblib # For saving the UMAP reducer
+
+def save_session(df, index, reducer, folder="session_data"):
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    # Save the text and 3D coordinates
+    df.to_parquet(os.path.join(folder, "data.parquet"))
+    # Save the FAISS vector index
+    faiss.write_index(index, os.path.join(folder, "index.faiss"))
+    # Save the UMAP model so we can transform new queries
+    joblib.dump(reducer, os.path.join(folder, "reducer.joblib"))
+    print("Session saved to disk.")
+
+def load_session(folder="session_data"):
+    if os.path.exists(folder):
+        df = pd.read_parquet(os.path.join(folder, "data.parquet"))
+        index = faiss.read_index(os.path.join(folder, "index.faiss"))
+        reducer = joblib.load(os.path.join(folder, "reducer.joblib"))
+        return df, index, reducer
+    return None, None, None
 
 # -----------------------------
 # Wrap text box
@@ -142,8 +162,35 @@ def build_system(model_name, chunk_method, chunk_size, overlap=5, num_clusters=5
 # -----------------------------
 # Main function
 # -----------------------------
-def run(query, model_name, k, chunk_method, chunk_size, overlap, color_mode, selected_sources, show_labels, num_clusters):
-    model, index, df, reducer = build_system(model_name, chunk_method, chunk_size, overlap, num_clusters)
+def run(query, model_name, k, chunk_method, chunk_size, overlap, color_mode, selected_sources, show_labels, num_clusters, force_rebuild):
+    # --- SESSION HANDLING ---
+    session_folder = "session_data"
+    if not os.path.exists(session_folder):
+        os.makedirs(session_folder)
+        
+    df_path = os.path.join(session_folder, "data.parquet")
+    df_path = os.path.join(session_folder, "data.parquet")
+    index_path = os.path.join(session_folder, "index.faiss")
+    reducer_path = os.path.join(session_folder, "reducer.joblib")
+
+    # Load existing model for either path
+    model = SentenceTransformer(MODELS[model_name])
+
+    if not force_rebuild and os.path.exists(df_path) and os.path.exists(index_path):
+        # LOAD SESSION
+        df = pd.read_parquet(df_path)
+        index = faiss.read_index(index_path)
+        reducer = joblib.load(reducer_path)
+    else:
+        # BUILD SESSION
+        model, index, df, reducer = build_system(model_name, chunk_method, chunk_size, overlap, num_clusters)
+        
+        # SAVE SESSION
+        if not os.path.exists(session_folder): os.makedirs(session_folder)
+        df.to_parquet(df_path)
+        faiss.write_index(index, index_path)
+        joblib.dump(reducer, reducer_path)
+
     if selected_sources:
         df = df[df["source"].isin(selected_sources)]
     
@@ -246,11 +293,12 @@ with gr.Blocks(fill_width=True) as app:
             num_clusters = gr.Slider(2, 20, value=5, step=1, label="Number of Clusters")
             k = gr.Slider(1, 5, value=3, step=1, label="Top-K Retrieval")
             chunk_method = gr.Radio(choices=["characters", "words", "sentences", "semantic"], value="words", label="Chunking Method")
-            chunk_size = gr.Slider(10, 500, value=50, step=10, label="Size")
+            chunk_size = gr.Slider(1, 500, value=50, step=10, label="Size")
             overlap = gr.Slider(0, 100, value=20, step=5, label="Overlap")
             color_mode = gr.Radio(choices=["cluster", "source"], value="cluster", label="Color By")
             source_filter = gr.Dropdown(choices=get_sources(), value=get_sources(), multiselect=True, label="Sources")
             show_labels = gr.Checkbox(value=False, label="Show Labels")
+            force_rebuild = gr.Checkbox(value=False, label="Rebuild Embedding Space")
             query = gr.Textbox(label="Query", value="outdoor activities")
             run_btn = gr.Button("Run", variant="primary")
         with gr.Column(scale=3):
@@ -264,7 +312,7 @@ with gr.Blocks(fill_width=True) as app:
 
     run_btn.click(
         fn=on_run_click,
-        inputs=[query, model_name, k, chunk_method, chunk_size, overlap, color_mode, source_filter, show_labels, num_clusters],
+        inputs=[query, model_name, k, chunk_method, chunk_size, overlap, color_mode, source_filter, show_labels, num_clusters, force_rebuild],
         outputs=[plot, output, full_screen_link]
     )
 
