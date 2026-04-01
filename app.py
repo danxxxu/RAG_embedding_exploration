@@ -17,6 +17,7 @@ from pillow_heif import register_heif_opener
 import base64
 from io import BytesIO
 import plotly.graph_objects as go
+import copy
 
 register_heif_opener()
 
@@ -210,7 +211,7 @@ def get_thumbnail_base64(path, size=(80, 80)):
         img = Image.open(path).convert("RGB")
         img.thumbnail(size, Image.Resampling.LANCZOS)
         buffered = BytesIO()
-        img.save(buffered, format="JPEG", quality=80, optimize=True)
+        img.save(buffered, format="JPEG", quality=80)
         img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
         return "data:image/jpeg;base64," + "".join(img_str.split())
     except Exception as e:
@@ -615,8 +616,20 @@ def run(
     fig_gradio = build_figure(df_view, query_3d, color_mode, show_labels, for_gradio=True)
 
     # HTML figure: JS tooltip for all points; full thumbnails kept
-    fig_html  = build_figure(df_view, query_3d, color_mode, show_labels, for_gradio=False)
-    html_str  = fig_html.to_html(full_html=True, include_plotlyjs="cdn")
+    # fig_html  = build_figure(df_view, query_3d, color_mode, show_labels, for_gradio=False)
+    # html_str  = fig_html.to_html(full_html=True, include_plotlyjs="cdn")
+    fig_html = copy.deepcopy(fig_gradio)
+    df_img = df_view[df_view["data_type"] == "image"]
+    if not df_img.empty:
+        for trace in fig_html.data:
+            # Image trace is identified by its name
+            if trace.name == "Images" and trace.customdata is not None:
+                cd = np.array(trace.customdata, dtype=object)
+                cd[:, 1] = df_img["thumbnail"].values  # restore thumbnails
+                trace.customdata = cd
+                trace.hovertemplate = "<extra></extra>"  # suppress native tooltip
+                break
+    html_str = fig_html.to_html(full_html=True, include_plotlyjs="cdn")
     full_html = html_str.replace("</body>", CONTROLS_AND_SCRIPT + "</body>")
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
     with open(tmp.name, "w", encoding="utf-8") as f:
