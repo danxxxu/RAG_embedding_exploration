@@ -8,3 +8,7 @@ __pycache__/
 *.pyc
 
 session_data/
+
+.DS_Store
+
+*.json

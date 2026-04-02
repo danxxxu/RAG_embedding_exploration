@@ -28,7 +28,8 @@ def list_available_datasets():
     if not os.path.exists(BASE_DATASETS_DIR):
         os.makedirs(BASE_DATASETS_DIR)
     folders = [
-        f for f in os.listdir(BASE_DATASETS_DIR)
+        f
+        for f in os.listdir(BASE_DATASETS_DIR)
         if os.path.isdir(os.path.join(BASE_DATASETS_DIR, f))
     ]
     return sorted(folders)
@@ -44,10 +45,26 @@ MODELS = {
 }
 
 SOURCE_COLORS = [
-    "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-    "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
-    "#469990", "#dcbeff", "#9A6324", "#fffac8", "#800000",
-    "#aaffc3", "#808000", "#ffd8b1", "#000075", "#a9a9a9",
+    "#e6194b",
+    "#3cb44b",
+    "#ffe119",
+    "#4363d8",
+    "#f58231",
+    "#911eb4",
+    "#42d4f4",
+    "#f032e6",
+    "#bfef45",
+    "#fabed4",
+    "#469990",
+    "#dcbeff",
+    "#9A6324",
+    "#fffac8",
+    "#800000",
+    "#aaffc3",
+    "#808000",
+    "#ffd8b1",
+    "#000075",
+    "#a9a9a9",
 ]
 
 
@@ -57,7 +74,9 @@ SOURCE_COLORS = [
 def save_session(df, index, reducer, dataset_name, folder="session_data"):
     path = os.path.join(folder, dataset_name)
     os.makedirs(path, exist_ok=True)
-    df.drop(columns=["thumbnail"], errors="ignore").to_parquet(os.path.join(path, "data.parquet"))
+    df.drop(columns=["thumbnail"], errors="ignore").to_parquet(
+        os.path.join(path, "data.parquet")
+    )
     faiss.write_index(index, os.path.join(path, "index.faiss"))
     joblib.dump(reducer, os.path.join(path, "reducer.joblib"))
     print("Session saved to disk.")
@@ -146,7 +165,7 @@ def chunk_text(texts, sources, method, chunk_size, overlap=20, model=None):
         if method == "characters":
             stride = max(chunk_size - overlap, 1)
             for i in range(0, len(text), stride):
-                chunk = text[i: i + chunk_size]
+                chunk = text[i : i + chunk_size]
                 if chunk.strip():
                     chunks.append(chunk)
                     chunk_sources.append(source)
@@ -154,19 +173,21 @@ def chunk_text(texts, sources, method, chunk_size, overlap=20, model=None):
             words = text.split()
             stride = max(chunk_size - overlap, 1)
             for i in range(0, len(words), stride):
-                chunk = " ".join(words[i: i + chunk_size])
+                chunk = " ".join(words[i : i + chunk_size])
                 if chunk:
                     chunks.append(chunk)
                     chunk_sources.append(source)
         elif method == "sentences":
             sentences = sent_tokenize(text)
             for i in range(0, len(sentences), chunk_size):
-                chunk = " ".join(sentences[i: i + chunk_size])
+                chunk = " ".join(sentences[i : i + chunk_size])
                 if chunk:
                     chunks.append(chunk)
                     chunk_sources.append(source)
         elif method == "semantic":
-            for chunk in semantic_chunking(text, model=model, max_chunk_size=chunk_size):
+            for chunk in semantic_chunking(
+                text, model=model, max_chunk_size=chunk_size
+            ):
                 chunks.append(chunk)
                 chunk_sources.append(source)
     return chunks, chunk_sources
@@ -197,6 +218,7 @@ def generate_cluster_labels(df, top_n=3):
 # -----------------------------
 def viridis_hex(cluster_id, cluster_min, cluster_max):
     import matplotlib.pyplot as plt
+
     cmap = plt.get_cmap("viridis")
     span = max(cluster_max - cluster_min, 1)
     r, g, b, _ = cmap((cluster_id - cluster_min) / span)
@@ -220,20 +242,79 @@ def get_thumbnail_base64(path, size=(80, 80)):
 
 
 # -----------------------------
+# export json
+# -----------------------------
+def export_to_json(df, filename="embedding_space.json"):
+    import json
+    import os
+
+    # ✅ Only keep what you NEED
+    df_export = df[["x", "y", "z", "cluster", "source", "data_type"]].copy()
+
+    # Optional: include short text preview (SAFE)
+    df_export["text"] = df["text"].astype(str).str.slice(0, 200)
+
+    # Normalize safely
+    for axis in ["x", "y", "z"]:
+        std = df_export[axis].std()
+        if std != 0:
+            df_export[axis] = (df_export[axis] - df_export[axis].mean()) / std
+
+    export_data = df_export.to_dict(orient="records")
+
+    save_path = os.path.join(".", filename)
+
+    print(f"Exporting {len(export_data)} points...")  # ✅ debug
+
+    with open(save_path, "w", encoding="utf-8") as f:
+        json.dump(export_data, f)
+
+    print("Export done.")  # ✅ debug
+
+    return save_path
+
+
+def on_export_click(filename):
+    global CURRENT_DF
+
+    if CURRENT_DF is None or len(CURRENT_DF) == 0:
+        return None
+
+    # Ensure it ends with .json
+    if not filename.endswith(".json"):
+        filename += ".json"
+
+    path = export_to_json(CURRENT_DF, filename)
+
+    return path
+
+
+# -----------------------------
 # Build pipeline
 # -----------------------------
-def build_system(dataset_name, model_name, chunk_method, chunk_size, overlap=5, num_clusters=5):
+def build_system(
+    dataset_name, model_name, chunk_method, chunk_size, overlap=5, num_clusters=5
+):
     current_path = os.path.join(BASE_DATASETS_DIR, dataset_name)
     is_clip = "CLIP" in model_name
-    raw_items, raw_sources, raw_types = load_multimodal_data(folder_path=current_path, is_clip=is_clip)
+    raw_items, raw_sources, raw_types = load_multimodal_data(
+        folder_path=current_path, is_clip=is_clip
+    )
 
     model = SentenceTransformer(MODELS[model_name])
-    final_data, final_sources, final_types, display_texts, thumbnails = [], [], [], [], []
+    final_data, final_sources, final_types, display_texts, thumbnails = (
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
 
     for item, source, itype in zip(raw_items, raw_sources, raw_types):
         if itype == "text":
             chunks = chunk_text(
-                [item], [source],
+                [item],
+                [source],
                 method=chunk_method,
                 chunk_size=chunk_size,
                 overlap=overlap,
@@ -263,18 +344,22 @@ def build_system(dataset_name, model_name, chunk_method, chunk_size, overlap=5, 
     emb_3d = reducer.fit_transform(embeddings)
 
     actual_clusters = min(num_clusters, len(final_data))
-    labels = KMeans(n_clusters=actual_clusters, n_init=10, random_state=0).fit_predict(emb_3d)
+    labels = KMeans(n_clusters=actual_clusters, n_init=10, random_state=0).fit_predict(
+        emb_3d
+    )
 
-    df = pd.DataFrame({
-        "x": emb_3d[:, 0],
-        "y": emb_3d[:, 1],
-        "z": emb_3d[:, 2],
-        "text": display_texts,
-        "source": final_sources,
-        "cluster": labels,
-        "data_type": final_types,
-        "thumbnail": thumbnails,
-    })
+    df = pd.DataFrame(
+        {
+            "x": emb_3d[:, 0],
+            "y": emb_3d[:, 1],
+            "z": emb_3d[:, 2],
+            "text": display_texts,
+            "source": final_sources,
+            "cluster": labels,
+            "data_type": final_types,
+            "thumbnail": thumbnails,
+        }
+    )
     df["wrapped_text"] = df["text"].apply(lambda x: wrap_text(str(x), 40))
     return model, index, df, reducer
 
@@ -296,12 +381,11 @@ def build_figure(df, query_3d, color_mode, show_labels, for_gradio=False):
 
     unique_sources = sorted(df["source"].unique())
     source_color_map = {
-        s: SOURCE_COLORS[i % len(SOURCE_COLORS)]
-        for i, s in enumerate(unique_sources)
+        s: SOURCE_COLORS[i % len(SOURCE_COLORS)] for i, s in enumerate(unique_sources)
     }
 
     df_text = df[df["data_type"] == "text"]
-    df_img  = df[df["data_type"] == "image"]
+    df_img = df[df["data_type"] == "image"]
 
     # ── Helper: marker dict ───────────────────────────────────
     def make_marker(series, size, symbol=None):
@@ -310,13 +394,15 @@ def build_figure(df, query_3d, color_mode, show_labels, for_gradio=False):
             base["symbol"] = symbol
             base["line"] = dict(width=1, color="white")
         if color_mode == "cluster":
-            base.update(dict(
-                color=series["cluster"],
-                colorscale="Viridis",
-                cmin=cluster_min,
-                cmax=cluster_max,
-                showscale=False,
-            ))
+            base.update(
+                dict(
+                    color=series["cluster"],
+                    colorscale="Viridis",
+                    cmin=cluster_min,
+                    cmax=cluster_max,
+                    showscale=False,
+                )
+            )
         else:
             base["color"] = series["source"].map(source_color_map).tolist()
         return base
@@ -325,47 +411,65 @@ def build_figure(df, query_3d, color_mode, show_labels, for_gradio=False):
     # These are invisible scatter points whose only job is to appear
     # in the legend with the right colour and label.
     if color_mode == "cluster":
-        label_map = generate_cluster_labels(df) if show_labels else {
-            cid: f"Cluster {cid}" for cid in sorted(df["cluster"].unique())
-        }
+        label_map = (
+            generate_cluster_labels(df)
+            if show_labels
+            else {cid: f"Cluster {cid}" for cid in sorted(df["cluster"].unique())}
+        )
         for cid in sorted(df["cluster"].unique()):
-            fig.add_trace(go.Scatter3d(
-                x=[None], y=[None], z=[None],
-                mode="markers",
-                marker=dict(size=8, color=viridis_hex(cid, cluster_min, cluster_max)),
-                name=label_map.get(cid, f"Cluster {cid}"),
-                showlegend=True,
-                hoverinfo="skip",
-            ))
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[None],
+                    y=[None],
+                    z=[None],
+                    mode="markers",
+                    marker=dict(
+                        size=8, color=viridis_hex(cid, cluster_min, cluster_max)
+                    ),
+                    name=label_map.get(cid, f"Cluster {cid}"),
+                    showlegend=True,
+                    hoverinfo="skip",
+                )
+            )
     else:
         for src, color in source_color_map.items():
-            fig.add_trace(go.Scatter3d(
-                x=[None], y=[None], z=[None],
-                mode="markers",
-                marker=dict(size=8, color=color),
-                name=src,
-                showlegend=True,
-                hoverinfo="skip",
-            ))
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[None],
+                    y=[None],
+                    z=[None],
+                    mode="markers",
+                    marker=dict(size=8, color=color),
+                    name=src,
+                    showlegend=True,
+                    hoverinfo="skip",
+                )
+            )
 
     # ── Text points ───────────────────────────────────────────
     # customdata: [source, wrapped_text]
     # Gradio → native Plotly hover (shows wrapped_text correctly)
     # HTML   → suppress native hover; JS tooltip reads the same customdata
     if not df_text.empty:
-        fig.add_trace(go.Scatter3d(
-            x=df_text["x"], y=df_text["y"], z=df_text["z"],
-            mode="markers",
-            marker=make_marker(df_text, size=3),
-            name="Text Docs",
-            showlegend=False,
-            customdata=np.stack((df_text["source"], df_text["wrapped_text"]), axis=-1),
-            hovertemplate=(
-                "<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>"
-                if for_gradio else
-                "<extra></extra>"  # hides native tooltip; JS uses customdata directly
-            ),
-        ))
+        fig.add_trace(
+            go.Scatter3d(
+                x=df_text["x"],
+                y=df_text["y"],
+                z=df_text["z"],
+                mode="markers",
+                marker=make_marker(df_text, size=3),
+                name="Text Docs",
+                showlegend=False,
+                customdata=np.stack(
+                    (df_text["source"], df_text["wrapped_text"]), axis=-1
+                ),
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>"
+                    if for_gradio
+                    else "<extra></extra>"  # hides native tooltip; JS uses customdata directly
+                ),
+            )
+        )
 
     # ── Image points ──────────────────────────────────────────
     # customdata: [source, thumbnail_b64]
@@ -373,33 +477,43 @@ def build_figure(df, query_3d, color_mode, show_labels, for_gradio=False):
     # HTML   → keep thumbnail; suppress native hover; JS tooltip shows image
     if not df_img.empty:
         if for_gradio:
-            img_customdata    = np.stack((df_img["source"], np.full(len(df_img), "")), axis=-1)
+            img_customdata = np.stack(
+                (df_img["source"], np.full(len(df_img), "")), axis=-1
+            )
             img_hovertemplate = "<b>%{customdata[0]}</b><extra></extra>"
         else:
-            img_customdata    = np.stack((df_img["source"], df_img["thumbnail"]), axis=-1)
+            img_customdata = np.stack((df_img["source"], df_img["thumbnail"]), axis=-1)
             img_hovertemplate = "<extra></extra>"
 
-        fig.add_trace(go.Scatter3d(
-            x=df_img["x"], y=df_img["y"], z=df_img["z"],
-            mode="markers",
-            name="Images",
-            showlegend=False,
-            marker=make_marker(df_img, size=7, symbol="diamond"),
-            customdata=img_customdata,
-            hovertemplate=img_hovertemplate,
-        ))
+        fig.add_trace(
+            go.Scatter3d(
+                x=df_img["x"],
+                y=df_img["y"],
+                z=df_img["z"],
+                mode="markers",
+                name="Images",
+                showlegend=False,
+                marker=make_marker(df_img, size=7, symbol="diamond"),
+                customdata=img_customdata,
+                hovertemplate=img_hovertemplate,
+            )
+        )
 
     # ── Query point ───────────────────────────────────────────
-    fig.add_trace(go.Scatter3d(
-        x=[query_3d[0][0]], y=[query_3d[0][1]], z=[query_3d[0][2]],
-        mode="markers+text",
-        marker=dict(size=10, color="white", line=dict(width=2, color="black")),
-        text=["SEARCH QUERY"],
-        textfont=dict(color="white", size=11),
-        name="Query",
-        showlegend=True,
-        hoverinfo="skip",
-    ))
+    fig.add_trace(
+        go.Scatter3d(
+            x=[query_3d[0][0]],
+            y=[query_3d[0][1]],
+            z=[query_3d[0][2]],
+            mode="markers+text",
+            marker=dict(size=10, color="white", line=dict(width=2, color="black")),
+            text=["SEARCH QUERY"],
+            textfont=dict(color="white", size=11),
+            name="Query",
+            showlegend=True,
+            hoverinfo="skip",
+        )
+    )
 
     fig.update_layout(
         height=800,
@@ -563,6 +677,7 @@ CONTROLS_AND_SCRIPT = """
 }());
 </script>
 """
+CURRENT_DF = None
 
 
 # -----------------------------
@@ -595,16 +710,21 @@ def run(
     else:
         current_path = os.path.join(BASE_DATASETS_DIR, dataset_name)
         df["thumbnail"] = df.apply(
-            lambda row: get_thumbnail_base64(os.path.join(current_path, row["source"]))
-            if row["data_type"] == "image" else "",
+            lambda row: (
+                get_thumbnail_base64(os.path.join(current_path, row["source"]))
+                if row["data_type"] == "image"
+                else ""
+            ),
             axis=1,
         )
         if "wrapped_text" not in df.columns:
             df["wrapped_text"] = df["text"].apply(lambda x: wrap_text(str(x), 40))
-
+    global CURRENT_DF
+    CURRENT_DF = df
     df_view = (
         df[df["source"].isin(selected_sources)].copy()
-        if selected_sources else df.copy()
+        if selected_sources
+        else df.copy()
     )
 
     query_emb = normalize(model.encode([query]))
@@ -613,7 +733,9 @@ def run(
     query_3d = reducer.transform(query_emb)
 
     # Gradio figure: native Plotly hover for text; thumbnails stripped
-    fig_gradio = build_figure(df_view, query_3d, color_mode, show_labels, for_gradio=True)
+    fig_gradio = build_figure(
+        df_view, query_3d, color_mode, show_labels, for_gradio=True
+    )
 
     # HTML figure: JS tooltip for all points; full thumbnails kept
     # fig_html  = build_figure(df_view, query_3d, color_mode, show_labels, for_gradio=False)
@@ -634,11 +756,11 @@ def run(
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
     with open(tmp.name, "w", encoding="utf-8") as f:
         f.write(full_html)
-
     return (
         fig_gradio,
         "\n\n---\n\n".join(results),
         gr.update(value=tmp.name, visible=True),
+        None,
     )
 
 
@@ -703,9 +825,16 @@ with gr.Blocks(fill_width=True) as app:
                 multiselect=True,
                 label="Filter Sources",
             )
-            force_rebuild = gr.Checkbox(value=False, label="Force Rebuild Embedding Space")
+            force_rebuild = gr.Checkbox(
+                value=False, label="Force Rebuild Embedding Space"
+            )
             query = gr.Textbox(label="Query", value="outdoor activities")
             run_btn = gr.Button("Run", variant="primary")
+            export_btn = gr.Button("Export JSON")
+            json_file = gr.File(label="Download JSON", visible=False)
+            filename_input = gr.Textbox(
+                label="Export Filename", value="embedding_space.json"
+            )
 
         # ── Right panel ───────────────────────────────────────
         with gr.Column(scale=3):
@@ -722,8 +851,8 @@ with gr.Blocks(fill_width=True) as app:
         return gr.update(choices=new_sources, value=new_sources)
 
     def on_run_click(*args):
-        fig, results, html_update = run(*args)
-        return fig, results, html_update
+        fig, results, html_update, json_path = run(*args)
+        return fig, results, html_update, json_path
 
     refresh_btn.click(fn=refresh_folders, outputs=dataset_selector)
     dataset_selector.change(fn=update_sources, inputs=dataset_selector, outputs=sources)
@@ -743,7 +872,8 @@ with gr.Blocks(fill_width=True) as app:
             num_clusters,
             force_rebuild,
         ],
-        outputs=[plot, output, html_file],
+        outputs=[plot, output, html_file, json_file],
     )
+    export_btn.click(fn=on_export_click, inputs=filename_input, outputs=json_file)
 
 app.launch(theme=gr.themes.Soft())
