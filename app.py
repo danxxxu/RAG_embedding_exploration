@@ -778,7 +778,7 @@ def get_sources_for_dataset(dataset_name):
 
 
 with gr.Blocks(fill_width=True) as app:
-    gr.Markdown("# RAG Embedding Explorer")
+    gr.Markdown("# RAG Embedding Generator")
 
     with gr.Row():
         # ── Left panel ────────────────────────────────────────
